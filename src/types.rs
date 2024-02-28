@@ -99,6 +99,7 @@ pub enum Message {
     Pipe(VmId, PipeArgs),
     PipeRead(VmId, PipeIoArgs),
     PipeWrite(VmId, PipeIoArgs),
+    InheritedFileDescriptor(VmId, PipeIoArgs),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -139,6 +140,7 @@ pub struct FullSuspendedState {
     pub next_pipe_slot: u64,
     pub vms: Vec<(VmId, VmState, Snapshot2<DataPieceId>)>,
     pub pipes: Vec<(PipeId, VmId)>,
+    pub inherited_fd: Vec<(VmId, Vec<PipeId>)>,
     pub terminated_vms: Vec<(VmId, i8)>,
 }
 
@@ -166,6 +168,7 @@ impl FullSuspendedState {
                 acc
             })
             + (self.pipes.len() * (size_of::<PipeId>() + size_of::<VmId>()))) as u64
+            + (self.inherited_fd.len() * (size_of::<PipeId>())) as u64
             + (self.terminated_vms.len() * (size_of::<VmId>() + size_of::<i8>())) as u64
     }
 }

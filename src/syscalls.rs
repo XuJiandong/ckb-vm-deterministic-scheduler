@@ -202,7 +202,7 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
         machine.add_cycles_no_checking(transferred_byte_cycles(buffer.len() as u64))?;
         let s = String::from_utf8(buffer)
             .map_err(|e| Error::External(format!("String from buffer {e:?}")))?;
-        log::debug!("Debug print from VM {}: {}", self.id, s);
+        log::info!("VM {}: {}", self.id, s);
 
         Ok(())
     }
@@ -437,6 +437,26 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
         // A0 will be updated once the read operation is fulfilled
         Err(Error::External("YIELD".to_string()))
     }
+    fn inherited_file_descriptors<Mac: SupportMachine>(
+        &mut self,
+        machine: &mut Mac,
+    ) -> Result<(), Error> {
+        let buffer_addr = machine.registers()[A0].to_u64();
+        let length_addr = machine.registers()[A1].to_u64();
+        self.message_box
+            .lock()
+            .expect("lock")
+            .push(Message::InheritedFileDescriptor(
+                self.id,
+                PipeIoArgs {
+                    pipe: PipeId(0),
+                    length: 0,
+                    buffer_addr,
+                    length_addr,
+                },
+            ));
+        Err(Error::External("YIELD".to_string()))
+    }
 }
 
 impl<
@@ -463,6 +483,7 @@ impl<
             2604 => self.pipe(machine),
             2605 => self.pipe_write(machine),
             2606 => self.pipe_read(machine),
+            2607 => self.inherited_file_descriptors(machine),
             _ => return Ok(false),
         }?;
         Ok(true)
@@ -483,8 +504,8 @@ pub(crate) fn transferred_byte_cycles(bytes: u64) -> u64 {
 }
 
 pub(crate) const SUCCESS: u8 = 0;
-const INDEX_OUT_OF_BOUND: u8 = 1;
-const SLICE_OUT_OF_BOUND: u8 = 3;
+pub(crate) const INDEX_OUT_OF_BOUND: u8 = 1;
+pub(crate) const SLICE_OUT_OF_BOUND: u8 = 3;
 pub(crate) const JOIN_FAILURE: u8 = 5;
 pub(crate) const INVALID_PIPE: u8 = 6;
 pub(crate) const OTHER_END_CLOSED: u8 = 7;

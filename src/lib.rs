@@ -24,8 +24,13 @@ use ckb_vm::{
     snapshot2::{DataSource, Snapshot2},
     Error, Register,
 };
-use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
+use std::{
+    collections::{BTreeMap, HashMap},
+    mem::size_of,
+};
+use syscalls::INDEX_OUT_OF_BOUND;
+use types::PipeIoArgs;
 
 pub mod dev_utils;
 pub mod syscalls;
@@ -58,6 +63,7 @@ pub struct Scheduler<
     next_pipe_slot: u64,
     states: BTreeMap<VmId, VmState>,
     pipes: HashMap<PipeId, VmId>,
+    inherited_fd: BTreeMap<VmId, Vec<PipeId>>,
     instantiated: BTreeMap<VmId, (MachineContext<DL>, AsmMachine)>,
     suspended: HashMap<VmId, Snapshot2<DataPieceId>>,
     terminated_vms: HashMap<VmId, i8>,
@@ -80,6 +86,7 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
             next_pipe_slot: FIRST_PIPE_SLOT,
             states: BTreeMap::default(),
             pipes: HashMap::default(),
+            inherited_fd: BTreeMap::default(),
             instantiated: BTreeMap::default(),
             suspended: HashMap::default(),
             message_box: Arc::new(Mutex::new(Vec::new())),
@@ -109,6 +116,7 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
                 .map(|(id, state, _)| (*id, state.clone()))
                 .collect(),
             pipes: full.pipes.into_iter().collect(),
+            inherited_fd: full.inherited_fd.into_iter().collect(),
             instantiated: BTreeMap::default(),
             suspended: full
                 .vms
@@ -137,6 +145,7 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
             next_pipe_slot: self.next_pipe_slot,
             vms,
             pipes: self.pipes.into_iter().collect(),
+            inherited_fd: self.inherited_fd.into_iter().collect(),
             terminated_vms: self.terminated_vms.into_iter().collect(),
         })
     }
@@ -301,6 +310,15 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
                     for pipe in &args.pipes {
                         self.pipes.insert(*pipe, spawned_vm_id);
                     }
+                    // here we keep the original version of file descriptors.
+                    // if one fd is moved afterward, this inherited file descriptors doesn't change.
+                    log::info!(
+                        "VmId = {} with Inherited file descriptor {:?}",
+                        spawned_vm_id,
+                        args.pipes
+                    );
+                    self.inherited_fd.insert(spawned_vm_id, args.pipes.clone());
+
                     self.ensure_vms_instantiated(&[vm_id])?;
                     {
                         let (_, machine) = self.instantiated.get_mut(&vm_id).unwrap();
@@ -421,6 +439,55 @@ impl<DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + C
                             length_addr: args.length_addr,
                         },
                     );
+                }
+                Message::InheritedFileDescriptor(vm_id, args) => {
+                    self.ensure_vms_instantiated(&[vm_id])?;
+                    let (_, machine) = self.instantiated.get_mut(&vm_id).unwrap();
+                    let PipeIoArgs {
+                        buffer_addr,
+                        length_addr,
+                        ..
+                    } = args;
+                    let input_length = machine
+                        .machine
+                        .inner_mut()
+                        .memory_mut()
+                        .load64(&length_addr)?;
+                    let inherited_fd = &self.inherited_fd[&vm_id];
+                    let actual_length = inherited_fd.len() as u64;
+                    if buffer_addr == 0 {
+                        if input_length == 0 {
+                            machine
+                                .machine
+                                .inner_mut()
+                                .memory_mut()
+                                .store64(&length_addr, &actual_length)?;
+                            machine.machine.set_register(A0, SUCCESS as u64);
+                        } else {
+                            // TODO: in the previous convention
+                            // https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0009-vm-syscalls/0009-vm-syscalls.md#partial-loading
+                            // this will load data in to address 0 without notice. It is now marked as an error.
+                            machine.machine.set_register(A0, INDEX_OUT_OF_BOUND as u64);
+                        }
+                        continue;
+                    }
+                    let mut buffer_addr2 = buffer_addr;
+                    let copy_length = u64::min(input_length, actual_length);
+                    for i in 0..copy_length {
+                        let fd = inherited_fd[i as usize].0;
+                        machine
+                            .machine
+                            .inner_mut()
+                            .memory_mut()
+                            .store64(&buffer_addr2, &fd)?;
+                        buffer_addr2 += size_of::<u64>() as u64;
+                    }
+                    machine
+                        .machine
+                        .inner_mut()
+                        .memory_mut()
+                        .store64(&length_addr, &actual_length)?;
+                    machine.machine.set_register(A0, SUCCESS as u64);
                 }
             }
         }
