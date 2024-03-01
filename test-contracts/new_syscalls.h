@@ -22,9 +22,7 @@ int ckb_join(uint64_t id, int8_t *exit_code) {
   return syscall(2602, id, exit_code, 0, 0, 0, 0);
 }
 
-uint64_t ckb_instance_id() {
-  return syscall(2603, 0, 0, 0, 0, 0, 0);
-}
+uint64_t ckb_instance_id() { return syscall(2603, 0, 0, 0, 0, 0, 0); }
 
 int ckb_pipe(uint64_t fildes[2]) {
   return syscall(2604, fildes, 0, 0, 0, 0, 0);
@@ -44,4 +42,10 @@ int ckb_pipe_write(const uint8_t *buffer, size_t *length, uint64_t filde) {
   return ret;
 }
 
+int ckb_inherited_file_descriptors(const uint64_t *fd, size_t *length) {
+  volatile size_t l = *length;
+  int ret = syscall(2607, fd, &l, 0, 0, 0, 0);
+  *length = l;
+  return ret;
+}
 #endif /* NEW_SYSCALLS_H_ */

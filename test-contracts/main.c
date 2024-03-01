@@ -73,8 +73,23 @@ int main(int argc, char *argv[]) {
   uint64_t vm_index = 0;
   if (argc != 0) {
     // For spawned VMs, read current VM index and passed pipes from argv
-    if (argc != 2) {
+    if (argc != 1) {
       return ERROR_ARGV;
+    }
+    uint64_t fd_length = 0;
+    ret = ckb_inherited_file_descriptors(0, &fd_length);
+    printf("Spawned VM with file descriptor count %lu", fd_length);
+    if (ret != 0) {
+      return ret;
+    }
+    uint64_t inherited_fd[fd_length];
+    memset(inherited_fd, 0, fd_length * sizeof(uint64_t));
+    ret = ckb_inherited_file_descriptors(inherited_fd, &fd_length);
+    if (ret != 0) {
+      return ret;
+    }
+    for (size_t i = 0; i < fd_length; i++) {
+      printf("Inherited file descriptor %lu", inherited_fd[i]);
     }
 
     uint64_t decoded_length = 0;
@@ -107,14 +122,6 @@ int main(int argc, char *argv[]) {
     }
     mol_seg_t passed_pipes_seg = MolReader_Spawn_get_pipes(&spawn_seg);
 
-    decoded_length = 0;
-    ret = ee_decode_char_string_in_place(argv[1], &decoded_length);
-    if (ret != 0) {
-      return ret;
-    }
-    if (decoded_length != MolReader_PipeIndices_length(&passed_pipes_seg) * 8) {
-      return ERROR_ARGV;
-    }
     for (mol_num_t i = 0; i < MolReader_PipeIndices_length(&passed_pipes_seg);
          i++) {
       mol_seg_res_t pipe_res = MolReader_PipeIndices_get(&passed_pipes_seg, i);
@@ -122,8 +129,7 @@ int main(int argc, char *argv[]) {
         return ERROR_ENCODING;
       }
       uint64_t pipe_index = *((uint64_t *)pipe_res.seg.ptr);
-      uint64_t pipe_id = *((uint64_t *)&argv[1][i * 8]);
-
+      uint64_t pipe_id = inherited_fd[i];
       ckb_printf("Obtained pipe index %lu, id: %lu", pipe_index, pipe_id);
 
       ret = pipes_add(&current_pipes, pipe_index, pipe_id);
@@ -163,6 +169,10 @@ int main(int argc, char *argv[]) {
       if (ret != 0) {
         return ret;
       }
+      printf(
+          "create pipe: read fd = %d, read index = %d, write fd = %d, write "
+          "index = %d",
+          fildes[0], read_index, fildes[1], write_index);
     }
   }
 
@@ -225,22 +235,12 @@ int main(int argc, char *argv[]) {
       }
       encoded_child_index[dst_len] = '\0';
 
-      src_len = passed_pipes.used * 8;
-      dst_len = ee_maximum_encoding_length(src_len);
-      uint8_t encoded_ids[dst_len + 1];
-      ret = ee_encode(encoded_ids, &dst_len, (const uint8_t *)passed_pipes.ids,
-                      &src_len);
-      if (ret != 0) {
-        return ret;
-      }
-      encoded_ids[dst_len] = '\0';
-
-      char *argv[2] = {(char *)encoded_child_index, (char *)encoded_ids};
+      char *argv[1] = {(char *)encoded_child_index};
       spawn2_args_t sargs;
       sargs.instance_id = &spawned_vms[spawned_count++];
       sargs.pipes = (const uint64_t *)passed_pipes.ids;
 
-      ret = ckb_spawn2(0, CKB_SOURCE_CELL_DEP, 0, 2, argv, &sargs);
+      ret = ckb_spawn2(0, CKB_SOURCE_CELL_DEP, 0, 1, argv, &sargs);
       if (ret != 0) {
         return ret;
       }

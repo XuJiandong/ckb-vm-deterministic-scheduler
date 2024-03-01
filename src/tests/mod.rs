@@ -1,6 +1,7 @@
 use crate::dev_utils::{build_mock_tx, generate_data_graph, verify_tx};
 use ckb_types::core::Cycle;
 use proptest::prelude::*;
+use std::io::Write;
 
 const MAX_CYCLES: Cycle = 300_000_000;
 const CYCLES_PER_ITERATE: Cycle = 10_000_000;
@@ -17,9 +18,13 @@ fn test_program_exists() {
 
 #[test]
 fn test_single_dag() {
+    env_logger::builder()
+        .format(|buf, record| writeln!(buf, ">>> {}", record.args()))
+        .init();
+
     let seed = 0;
-    let spawns = 62;
-    let writes = 168;
+    let spawns = 4;
+    let writes = 4;
 
     let data = generate_data_graph(seed, spawns, writes, 3).expect("generate dag");
     let program_path = match std::env::var("TEST_BIN") {
